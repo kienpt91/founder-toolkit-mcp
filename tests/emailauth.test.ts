@@ -22,8 +22,8 @@ const codes = (r: { findings: { code: string }[] }) => r.findings.map((f) => f.c
 describe("SPF", () => {
   it("passes a clean -all record and counts include lookups", async () => {
     const { resolver } = fakeResolver({
-      "example.com": ["v=spf1 ip4:203.0.113.0/24 include:_spf.sender.test -all"],
-      "_spf.sender.test": ["v=spf1 ip4:198.51.100.0/24 -all"],
+      "example.com": ["v=spf1 ip4:203.0.113.0/24 include:_spf.sender.example.net -all"],
+      "_spf.sender.example.net": ["v=spf1 ip4:198.51.100.0/24 -all"],
     });
     const r = await analyzeSpf(resolver, "example.com");
     expect(r.status).toBe("pass");
@@ -41,7 +41,7 @@ describe("SPF", () => {
   });
 
   it("fails on multiple SPF records", async () => {
-    const { resolver } = fakeResolver({ "example.com": ["v=spf1 -all", "v=spf1 include:x.test -all"] });
+    const { resolver } = fakeResolver({ "example.com": ["v=spf1 -all", "v=spf1 include:x.example.net -all"] });
     const r = await analyzeSpf(resolver, "example.com");
     expect(r.status).toBe("fail");
     expect(codes(r)).toEqual(["spf-multiple"]);
@@ -74,9 +74,9 @@ describe("SPF", () => {
   });
 
   it("fails when include lookups exceed 10", async () => {
-    const includes = Array.from({ length: 11 }, (_, i) => `include:s${i}.test`);
+    const includes = Array.from({ length: 11 }, (_, i) => `include:s${i}.example.net`);
     const txt: Record<string, string[]> = { "example.com": [`v=spf1 ${includes.join(" ")} -all`] };
-    for (let i = 0; i < 11; i++) txt[`s${i}.test`] = ["v=spf1 ip4:192.0.2.1 -all"];
+    for (let i = 0; i < 11; i++) txt[`s${i}.example.net`] = ["v=spf1 ip4:192.0.2.1 -all"];
     const r = await analyzeSpf(fakeResolver(txt).resolver, "example.com");
     expect(r.status).toBe("fail");
     expect(codes(r)).toContain("spf-lookup-limit");
@@ -85,19 +85,19 @@ describe("SPF", () => {
 
   it("counts nested includes toward the limit", async () => {
     const txt: Record<string, string[]> = {
-      "example.com": ["v=spf1 include:a.test include:b.test -all"],
-      "a.test": ["v=spf1 include:a1.test include:a2.test include:a3.test include:a4.test include:a5.test -all"],
-      "b.test": ["v=spf1 include:b1.test include:b2.test include:b3.test include:b4.test include:b5.test -all"],
+      "example.com": ["v=spf1 include:a.example.net include:b.example.net -all"],
+      "a.example.net": ["v=spf1 include:a1.example.net include:a2.example.net include:a3.example.net include:a4.example.net include:a5.example.net -all"],
+      "b.example.net": ["v=spf1 include:b1.example.net include:b2.example.net include:b3.example.net include:b4.example.net include:b5.example.net -all"],
     };
-    for (const n of ["a1", "a2", "a3", "a4", "a5", "b1", "b2", "b3", "b4", "b5"]) txt[`${n}.test`] = ["v=spf1 ip4:192.0.2.1 -all"];
+    for (const n of ["a1", "a2", "a3", "a4", "a5", "b1", "b2", "b3", "b4", "b5"]) txt[`${n}.example.net`] = ["v=spf1 ip4:192.0.2.1 -all"];
     const r = await analyzeSpf(fakeResolver(txt).resolver, "example.com");
     expect(codes(r)).toContain("spf-lookup-limit");
   });
 
   it("accepts exactly 10 lookups but notes it is near the limit", async () => {
-    const includes = Array.from({ length: 10 }, (_, i) => `include:s${i}.test`);
+    const includes = Array.from({ length: 10 }, (_, i) => `include:s${i}.example.net`);
     const txt: Record<string, string[]> = { "example.com": [`v=spf1 ${includes.join(" ")} -all`] };
-    for (let i = 0; i < 10; i++) txt[`s${i}.test`] = ["v=spf1 ip4:192.0.2.1 -all"];
+    for (let i = 0; i < 10; i++) txt[`s${i}.example.net`] = ["v=spf1 ip4:192.0.2.1 -all"];
     const r = await analyzeSpf(fakeResolver(txt).resolver, "example.com");
     expect(r.dnsLookups).toBe(10);
     expect(codes(r)).toEqual(["spf-lookup-near-limit"]);
@@ -105,7 +105,7 @@ describe("SPF", () => {
   });
 
   it("fails an include that points at a domain with no SPF record", async () => {
-    const { resolver } = fakeResolver({ "example.com": ["v=spf1 include:ghost.test -all"] });
+    const { resolver } = fakeResolver({ "example.com": ["v=spf1 include:ghost.example.net -all"] });
     const r = await analyzeSpf(resolver, "example.com");
     expect(codes(r)).toContain("spf-include-missing");
     expect(r.status).toBe("fail");
@@ -113,8 +113,8 @@ describe("SPF", () => {
 
   it("detects include loops without recursing forever", async () => {
     const { resolver } = fakeResolver({
-      "example.com": ["v=spf1 include:a.test -all"],
-      "a.test": ["v=spf1 include:example.com -all"],
+      "example.com": ["v=spf1 include:a.example.net -all"],
+      "a.example.net": ["v=spf1 include:example.com -all"],
     });
     const r = await analyzeSpf(resolver, "example.com");
     expect(codes(r)).toContain("spf-include-loop");
@@ -122,8 +122,8 @@ describe("SPF", () => {
 
   it("follows redirect= and takes the effective all from the target", async () => {
     const { resolver } = fakeResolver({
-      "example.com": ["v=spf1 redirect=_spf.sender.test"],
-      "_spf.sender.test": ["v=spf1 ip4:192.0.2.1 -all"],
+      "example.com": ["v=spf1 redirect=_spf.sender.example.net"],
+      "_spf.sender.example.net": ["v=spf1 ip4:192.0.2.1 -all"],
     });
     const r = await analyzeSpf(resolver, "example.com");
     expect(r.allQualifier).toBe("-");
@@ -142,6 +142,85 @@ describe("SPF", () => {
     const r = await analyzeSpf(resolver, "example.com");
     expect(r.status).toBe("unknown");
     expect(codes(r)).toEqual(["dns-lookup-failed"]);
+  });
+});
+
+describe("SPF targets read from the audited domain's own record", () => {
+  it("does not query internal-looking, single-label, IP-like or wildcard-DNS include targets", async () => {
+    const { resolver, queries } = fakeResolver({
+      "example.com": [
+        "v=spf1 include:db.corp include:intranet include:10.0.0.1 include:127.0.0.1.nip.io include:foo.localhost include:a..b.com -all",
+      ],
+    });
+    const r = await analyzeSpf(resolver, "example.com");
+    expect(queries).toEqual(["TXT example.com"]);
+    expect(r.findings.filter((f) => f.code === "spf-unsafe-target")).toHaveLength(6);
+    expect(r.status).toBe("warn");
+    expect(r.dnsLookups).toBe(6);
+  });
+
+  it("does not query an unsafe redirect target", async () => {
+    const { resolver, queries } = fakeResolver({ "example.com": ["v=spf1 redirect=spf.corp"] });
+    const r = await analyzeSpf(resolver, "example.com");
+    expect(queries).toEqual(["TXT example.com"]);
+    expect(codes(r)).toContain("spf-unsafe-target");
+  });
+
+  it("counts macro targets as lookups but does not query them", async () => {
+    const { resolver, queries } = fakeResolver({ "example.com": ["v=spf1 include:%{d}._spf.sender.example.net -all"] });
+    const r = await analyzeSpf(resolver, "example.com");
+    expect(queries).toEqual(["TXT example.com"]);
+    expect(codes(r)).toEqual(["spf-macro-target"]);
+    expect(r.dnsLookups).toBe(1);
+  });
+
+  it("caps total SPF queries at 25 even for a hostile fan-out", async () => {
+    const txt: Record<string, string[]> = {};
+    for (let i = 0; i < 200; i++) txt[`n${i}.example.net`] = [`v=spf1 include:n${i + 1}.example.net include:m${i + 1}.example.net -all`];
+    txt["example.com"] = ["v=spf1 include:n0.example.net -all"];
+    const { resolver, queries } = fakeResolver(txt);
+    await analyzeSpf(resolver, "example.com");
+    expect(queries.length).toBeLessThanOrEqual(25);
+  });
+
+  it("echoes hostile targets only cleaned and capped", async () => {
+    const hostile = `evil\u200b.corp${"x".repeat(300)}`;
+    const { resolver } = fakeResolver({ "example.com": [`v=spf1 include:${hostile} -all`] });
+    const r = await analyzeSpf(resolver, "example.com");
+    const message = r.findings.find((f) => f.code === "spf-unsafe-target")?.message ?? "";
+    expect(message.length).toBeLessThan(400);
+    expect(message).not.toContain("\u200b");
+  });
+});
+
+describe("overall deadline", () => {
+  it("returns unknown results instead of hanging when DNS never answers", async () => {
+    const never = { resolveTxt: () => new Promise<string[][]>(() => {}), resolveMx: () => new Promise<{ exchange: string; priority: number }[]>(() => {}) };
+    const started = Date.now();
+    const report = await runEmailAuthCheck(never, { domain: "example.com", dkimSelectors: ["s1"] }, { deadlineMs: 50 });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(report.status).toBe("unknown");
+    for (const part of [report.spf, report.dmarc, report.dkim, report.mx]) expect(part.status).toBe("unknown");
+    expect(report.findings.every((f) => f.code === "dns-deadline")).toBe(true);
+    expect(report.findings[0]?.message).toContain("unknown, not \"missing\"");
+  });
+
+  it("stops following the SPF chain once the deadline has passed", async () => {
+    const txt: Record<string, string[]> = {
+      "example.com": ["v=spf1 include:a.example.net -all"],
+      "a.example.net": ["v=spf1 ip4:192.0.2.1 -all"],
+    };
+    const { resolver, queries } = fakeResolver(txt);
+    const r = await analyzeSpf(resolver, "example.com", Date.now() - 1);
+    expect(queries).toEqual(["TXT example.com"]);
+    expect(codes(r)).toContain("spf-deadline");
+    expect(codes(r)).not.toContain("spf-lookup-limit");
+  });
+
+  it("caps the number of MX hosts reported", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ exchange: `mx${i}.example.net`, priority: i }));
+    const r = await analyzeMx(fakeResolver({}, { "example.com": many }).resolver, "example.com");
+    expect(r.hosts).toHaveLength(20);
   });
 });
 
@@ -285,9 +364,9 @@ describe("DKIM", () => {
 
 describe("MX", () => {
   it("sorts hosts by priority", async () => {
-    const { resolver } = fakeResolver({}, { "example.com": [{ exchange: "b.mail.test", priority: 20 }, { exchange: "a.mail.test", priority: 10 }] });
+    const { resolver } = fakeResolver({}, { "example.com": [{ exchange: "b.mail.example.net", priority: 20 }, { exchange: "a.mail.example.net", priority: 10 }] });
     const r = await analyzeMx(resolver, "example.com");
-    expect(r.hosts.map((h) => h.exchange)).toEqual(["a.mail.test", "b.mail.test"]);
+    expect(r.hosts.map((h) => h.exchange)).toEqual(["a.mail.example.net", "b.mail.example.net"]);
     expect(r.status).toBe("pass");
   });
 
@@ -320,12 +399,12 @@ describe("email_auth_check roll-up", () => {
   it("combines all four checks into one report with a summary line", async () => {
     const { resolver } = fakeResolver(
       {
-        "example.com": ["v=spf1 include:_spf.sender.test -all"],
-        "_spf.sender.test": ["v=spf1 ip4:192.0.2.0/24 -all"],
+        "example.com": ["v=spf1 include:_spf.sender.example.net -all"],
+        "_spf.sender.example.net": ["v=spf1 ip4:192.0.2.0/24 -all"],
         "_dmarc.example.com": ["v=DMARC1; p=none"],
         "s1._domainkey.example.com": [`v=DKIM1; p=${rsaKeyB64(2048)}`],
       },
-      { "example.com": [{ exchange: "mx.mail.test", priority: 10 }] },
+      { "example.com": [{ exchange: "mx.mail.example.net", priority: 10 }] },
     );
     const report = await runEmailAuthCheck(resolver, { domain: "example.com", dkimSelectors: ["s1"] });
     expect(report.status).toBe("warn");

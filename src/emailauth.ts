@@ -1,9 +1,8 @@
 import { createPublicKey } from "node:crypto";
 import { Resolver } from "node:dns/promises";
 import { z } from "zod";
-import type { Shaped } from "./seobolt.js";
-import { clip } from "./text.js";
-import { normalizeDomain } from "./validate.js";
+import { cleanText, clip, shaped, type Shaped } from "./text.js";
+import { normalizeDomain, publicNameProblem } from "./validate.js";
 
 export interface MxRecord {
   exchange: string;
@@ -16,7 +15,7 @@ export interface DnsResolver {
   resolveMx(name: string): Promise<MxRecord[]>;
 }
 
-export function createNodeResolver(timeoutMs = 4000): DnsResolver {
+export function createNodeResolver(timeoutMs = 3000): DnsResolver {
   const resolver = new Resolver({ timeout: timeoutMs, tries: 2 });
   return {
     resolveTxt: (name) => resolver.resolveTxt(name),
@@ -167,6 +166,43 @@ interface SpfContext {
   findings: Finding[];
   visited: Set<string>;
   budgetExhausted: boolean;
+  /** Epoch ms after which no further lookups are started. */
+  deadlineAt: number;
+  timedOut: boolean;
+}
+
+/**
+ * include/redirect targets come from the audited domain's own (attacker-controllable) record, so they get the same
+ * public-name checks as user input before the local resolver is asked about them. Returns undefined, after recording
+ * a finding, when the target must not be queried.
+ */
+function vetSpfTarget(ctx: SpfContext, kind: "include" | "redirect", raw: string, owner: string): string | undefined {
+  const target = raw.toLowerCase().replace(/\.$/, "");
+  const shownTarget = JSON.stringify(cleanText(target, 80));
+  if (target.includes("%")) {
+    ctx.findings.push({
+      severity: "info",
+      code: "spf-macro-target",
+      message: `SPF ${kind} target ${shownTarget} in ${owner} uses macros, which this tool does not expand; it was counted as a lookup but not followed.`,
+    });
+    return undefined;
+  }
+  const problem = publicNameProblem(target);
+  if (problem) {
+    ctx.findings.push({
+      severity: "warn",
+      code: "spf-unsafe-target",
+      message: `SPF ${kind} target ${shownTarget} in ${owner} was not queried: ${problem}.`,
+      fix: "Check the record for a typo; an include or redirect should name a public provider domain.",
+    });
+    return undefined;
+  }
+  return target;
+}
+
+function outOfBudget(ctx: SpfContext, depth: number): boolean {
+  if (Date.now() > ctx.deadlineAt) ctx.timedOut = true;
+  return ctx.timedOut || ctx.lookups > SPF_LOOKUP_LIMIT || ctx.queries >= MAX_SPF_QUERIES || depth >= SPF_LOOKUP_LIMIT;
 }
 
 async function fetchSpfRecords(ctx: SpfContext, domain: string): Promise<{ records: string[]; failed?: string }> {
@@ -207,7 +243,8 @@ async function walkSpf(
     }
     if (["include", "a", "mx", "ptr", "exists"].includes(t.mechanism)) ctx.lookups++;
     if (t.mechanism === "include" && t.value) {
-      const target = t.value.toLowerCase().replace(/\.$/, "");
+      const target = vetSpfTarget(ctx, "include", t.value, domain);
+      if (target === undefined) continue;
       if (ctx.visited.has(target)) {
         ctx.findings.push({
           severity: "fail",
@@ -217,8 +254,8 @@ async function walkSpf(
         });
         continue;
       }
-      if (ctx.lookups > SPF_LOOKUP_LIMIT || ctx.queries >= MAX_SPF_QUERIES || depth >= SPF_LOOKUP_LIMIT) {
-        ctx.budgetExhausted = true;
+      if (outOfBudget(ctx, depth)) {
+        if (!ctx.timedOut) ctx.budgetExhausted = true;
         continue;
       }
       ctx.visited.add(target);
@@ -239,9 +276,10 @@ async function walkSpf(
   }
   if (allQualifier === "none" && redirect) {
     ctx.lookups++;
-    const target = redirect.toLowerCase().replace(/\.$/, "");
-    if (ctx.visited.has(target) || ctx.lookups > SPF_LOOKUP_LIMIT || ctx.queries >= MAX_SPF_QUERIES || depth >= SPF_LOOKUP_LIMIT) {
-      ctx.budgetExhausted = true;
+    const target = vetSpfTarget(ctx, "redirect", redirect, domain);
+    if (target === undefined) return "redirect";
+    if (ctx.visited.has(target) || outOfBudget(ctx, depth)) {
+      if (!ctx.timedOut) ctx.budgetExhausted = true;
       return "redirect";
     }
     ctx.visited.add(target);
@@ -264,8 +302,8 @@ async function walkSpf(
   return allQualifier;
 }
 
-export async function analyzeSpf(resolver: DnsResolver, domain: string): Promise<SpfResult> {
-  const ctx: SpfContext = { resolver, lookups: 0, queries: 1, findings: [], visited: new Set([domain]), budgetExhausted: false };
+export async function analyzeSpf(resolver: DnsResolver, domain: string, deadlineAt = Number.POSITIVE_INFINITY): Promise<SpfResult> {
+  const ctx: SpfContext = { resolver, lookups: 0, queries: 1, findings: [], visited: new Set([domain]), budgetExhausted: false, deadlineAt, timedOut: false };
   const txt = await lookupTxt(resolver, domain);
   if (txt.failed) return { status: "unknown", findings: [lookupFailedFinding(domain, txt.failed)] };
   const records = txt.records.filter((r) => SPF_PREFIX.test(r.trim()));
@@ -285,7 +323,7 @@ export async function analyzeSpf(resolver: DnsResolver, domain: string): Promise
   if (records.length > 1) {
     return {
       status: "fail",
-      record: records.join(" || "),
+      record: clip(records.join(" || "), 600),
       findings: [
         {
           severity: "fail",
@@ -299,6 +337,14 @@ export async function analyzeSpf(resolver: DnsResolver, domain: string): Promise
   const record = records[0] as string;
   const all = await walkSpf(ctx, domain, record, 0);
   const findings = ctx.findings;
+  if (ctx.timedOut) {
+    findings.push({
+      severity: "warn",
+      code: "spf-deadline",
+      message: "The SPF include chain was not fully followed because the overall time limit for this check was reached; the lookup count and the `all` result may be incomplete.",
+      fix: "Retry later, or check the include chain with a dedicated SPF tool.",
+    });
+  }
   if (ctx.budgetExhausted || ctx.lookups > SPF_LOOKUP_LIMIT) {
     findings.push({
       severity: "fail",
@@ -401,7 +447,7 @@ export async function analyzeDmarc(resolver: DnsResolver, domain: string): Promi
   if (records.length > 1) {
     return {
       status: "fail",
-      record: records.join(" || "),
+      record: clip(records.join(" || "), 600),
       findings: [
         {
           severity: "fail",
@@ -651,7 +697,7 @@ export async function analyzeMx(resolver: DnsResolver, domain: string): Promise<
     if (!NO_DATA.has(code)) return { status: "unknown", hosts: [], findings: [lookupFailedFinding(domain, code)] };
     records = [];
   }
-  const hosts = [...records].sort((a, b) => a.priority - b.priority);
+  const hosts = [...records].sort((a, b) => a.priority - b.priority).slice(0, 20);
   if (hosts.length === 0) {
     return {
       status: "warn",
@@ -685,15 +731,51 @@ export interface EmailAuthReport {
   notes: string[];
 }
 
+export const DEFAULT_DEADLINE_MS = 20_000;
+
+function deadlineFinding(what: string, ms: number): Finding {
+  return {
+    severity: "warn",
+    code: "dns-deadline",
+    message: `The ${what} check did not finish within ${Math.round(ms / 1000)} seconds (slow or unresponsive DNS servers); its result is unknown, not "missing".`,
+    fix: "Retry later.",
+  };
+}
+
+/** Resolves with `onTimeout()` if `work` has not settled after `ms`; the abandoned lookups end on the resolver's own timeout. */
+async function withDeadline<T>(work: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(onTimeout()), ms);
+  });
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function runEmailAuthCheck(
   resolver: DnsResolver,
   input: { domain: string; dkimSelectors?: string[] | undefined },
+  options: { deadlineMs?: number } = {},
 ): Promise<EmailAuthReport> {
+  const ms = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+  const deadlineAt = Date.now() + ms;
   const [spf, dmarc, dkim, mx] = await Promise.all([
-    analyzeSpf(resolver, input.domain),
-    analyzeDmarc(resolver, input.domain),
-    analyzeDkim(resolver, input.domain, input.dkimSelectors),
-    analyzeMx(resolver, input.domain),
+    withDeadline(analyzeSpf(resolver, input.domain, deadlineAt), ms, (): SpfResult => ({ status: "unknown", findings: [deadlineFinding("SPF", ms)] })),
+    withDeadline(analyzeDmarc(resolver, input.domain), ms, (): DmarcResult => ({ status: "unknown", findings: [deadlineFinding("DMARC", ms)] })),
+    withDeadline(
+      analyzeDkim(resolver, input.domain, input.dkimSelectors),
+      ms,
+      (): DkimResult => ({
+        status: "unknown",
+        mode: input.dkimSelectors?.length ? "selectors-given" : "probed-common-selectors",
+        selectors: [],
+        findings: [deadlineFinding("DKIM", ms)],
+      }),
+    ),
+    withDeadline(analyzeMx(resolver, input.domain), ms, (): MxResult => ({ status: "unknown", hosts: [], findings: [deadlineFinding("MX", ms)] })),
   ]);
   const tag = <T extends string>(check: T, fs: Finding[]) => fs.map((f) => ({ ...f, check }));
   const findings = [
@@ -729,8 +811,8 @@ export async function runEmailAuthCheck(
 export function shapeEmailAuth(report: EmailAuthReport): Shaped {
   const dkimFound = report.dkim.selectors.filter((s) => s.state === "ok").length;
   const part = (label: string, status: Status) => `${label} ${status}`;
-  return {
-    summary: `Email auth for ${report.domain}: ${report.status.toUpperCase()} - ${part("SPF", report.spf.status)}, ${part("DMARC", report.dmarc.status)}, ${part("DKIM", report.dkim.status)} (${dkimFound} valid key${dkimFound === 1 ? "" : "s"}), ${part("MX", report.mx.status)} (${report.mx.hosts.length} host${report.mx.hosts.length === 1 ? "" : "s"}).`,
-    data: report as unknown as Record<string, unknown>,
-  };
+  return shaped(
+    `Email auth for ${report.domain}: ${report.status.toUpperCase()} - ${part("SPF", report.spf.status)}, ${part("DMARC", report.dmarc.status)}, ${part("DKIM", report.dkim.status)} (${dkimFound} valid key${dkimFound === 1 ? "" : "s"}), ${part("MX", report.mx.status)} (${report.mx.hosts.length} host${report.mx.hosts.length === 1 ? "" : "s"}).`,
+    report as unknown as Record<string, unknown>,
+  );
 }

@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { ToolkitError } from "./errors.js";
 import { requestJson, type FetchLike } from "./http.js";
-import type { Shaped } from "./seobolt.js";
-import { clip, isRecord, num, str } from "./text.js";
+import { cleanText, httpUrlOrUndefined, isRecord, num, shaped, str, type Shaped } from "./text.js";
 
 export const SHOWMRR_BASE = "https://showmrr.com/api";
 export const SHOWMRR_TIMEOUT_MS = 15_000;
@@ -24,7 +23,13 @@ export const leaderboardShape = {
 };
 
 export const searchShape = {
-  query: z.string().trim().min(1).max(100).describe("Startup name or keyword to search for."),
+  query: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .regex(/^[^\p{C}]+$/u, "query must not contain control or invisible characters")
+    .describe("Startup name or keyword to search for."),
 };
 
 export const startupShape = {
@@ -52,22 +57,24 @@ function shapeStartup(raw: unknown): Record<string, unknown> {
   }
   const isVerified = raw.isVerified === true;
   const cents = num(raw.currentMrrCents);
-  const currency = str(raw.mrrCurrency) ?? "usd";
+  const reportedCurrency = str(raw.mrrCurrency);
+  // A currency code is 3-6 letters; anything else is shown as "unknown" rather than echoed.
+  const currency = reportedCurrency === undefined ? "usd" : /^[A-Za-z]{3,6}$/.test(reportedCurrency) ? reportedCurrency : "unknown";
   const source = isRecord(raw.publicSource)
-    ? { url: str(raw.publicSource.url), metric: str(raw.publicSource.metric), readAt: str(raw.publicSource.readAt) }
+    ? { url: httpUrlOrUndefined(raw.publicSource.url), metric: str(raw.publicSource.metric), readAt: str(raw.publicSource.readAt) }
     : undefined;
   return {
     id: num(raw.id) ?? num(raw.startupId),
-    slug: str(raw.slug),
-    name: str(raw.name),
+    slug: typeof raw.slug === "string" ? cleanText(raw.slug, 100) : undefined,
+    name: typeof raw.name === "string" ? cleanText(raw.name, 120) : undefined,
     category: str(raw.category),
-    tagline: raw.tagline === null || raw.tagline === undefined ? undefined : clip(str(raw.tagline) ?? "", 200),
-    websiteUrl: str(raw.websiteUrl),
+    tagline: typeof raw.tagline === "string" ? cleanText(raw.tagline, 200) : undefined,
+    websiteUrl: httpUrlOrUndefined(raw.websiteUrl),
     rank: num(raw.rank),
     mrr: { amountCents: cents, currency: currency.toLowerCase(), formatted: formatMoney(cents, currency) },
     verification: isVerified ? "verified" : "NOT verified",
     isVerified,
-    founderName: str(raw.founderName),
+    founderName: typeof raw.founderName === "string" ? cleanText(raw.founderName, 120) : undefined,
     revenueAsOf: str(raw.revenueAsOf),
     ...(raw.claimable !== undefined ? { claimable: raw.claimable === true } : {}),
     ...(source ? { publicSource: source } : {}),
@@ -118,10 +125,10 @@ export class ShowMrrClient {
       })),
       notice: VERIFICATION_NOTICE,
     };
-    return {
-      summary: `ShowMRR: ${data.startupCount} startups, ${data.verifiedCount ?? "n/a"} verified; total listed MRR ${data.totalMrr.formatted} (includes unverified figures).`,
+    return shaped(
+      `ShowMRR: ${data.startupCount} startups, ${data.verifiedCount ?? "n/a"} verified; total listed MRR ${data.totalMrr.formatted} (includes unverified figures).`,
       data,
-    };
+    );
   }
 
   async leaderboard(input: { limit: number; category?: string | undefined }): Promise<Shaped> {
@@ -131,30 +138,29 @@ export class ShowMrrClient {
       .map(shapeStartup)
       .slice(0, input.limit);
     const unverified = startups.filter((s) => s.isVerified !== true).length;
-    return {
-      summary: `ShowMRR leaderboard${input.category ? ` (${input.category})` : ""}: ${startups.length} row(s), ${unverified} NOT verified.${startups[0] ? ` Top: ${describeRow(startups[0])}.` : ""}`,
-      data: { count: startups.length, category: input.category, startups, notice: VERIFICATION_NOTICE },
-    };
+    return shaped(
+      `ShowMRR leaderboard${input.category ? ` (${input.category})` : ""}: ${startups.length} row(s), ${unverified} NOT verified.${startups[0] ? ` Top: ${describeRow(startups[0])}.` : ""}`,
+      { count: startups.length, category: input.category, startups, notice: VERIFICATION_NOTICE },
+    );
   }
 
   async search(query: string): Promise<Shaped> {
     const params = new URLSearchParams({ q: query });
     const startups = rows(await this.get(`/search?${params.toString()}`), "search").map(shapeStartup).slice(0, 20);
-    return {
-      summary:
-        startups.length === 0
-          ? `ShowMRR search "${query}": no matching startups listed. Absence from ShowMRR proves nothing about the company's revenue.`
-          : `ShowMRR search "${query}": ${startups.length} match(es). ${startups.slice(0, 3).map(describeRow).join("; ")}.`,
-      data: { query, count: startups.length, startups, notice: VERIFICATION_NOTICE },
-    };
+    return shaped(
+      startups.length === 0
+        ? `ShowMRR search "${query}": no matching startups listed. Absence from ShowMRR proves nothing about the company's revenue.`
+        : `ShowMRR search "${query}": ${startups.length} match(es). ${startups.slice(0, 3).map(describeRow).join("; ")}.`,
+      { query, count: startups.length, startups, notice: VERIFICATION_NOTICE },
+    );
   }
 
   async startup(idOrSlug: string): Promise<Shaped> {
     const raw = await this.get(`/startups/${encodeURIComponent(idOrSlug)}`);
     const startup = shapeStartup(raw);
-    return {
-      summary: `ShowMRR startup ${startup.name ?? idOrSlug}: ${(startup.mrr as { formatted: string }).formatted}/mo, ${startup.verification}.`,
-      data: { startup, notice: VERIFICATION_NOTICE },
-    };
+    return shaped(
+      `ShowMRR startup ${startup.name ?? idOrSlug}: ${(startup.mrr as { formatted: string }).formatted}/mo, ${startup.verification}.`,
+      { startup, notice: VERIFICATION_NOTICE },
+    );
   }
 }

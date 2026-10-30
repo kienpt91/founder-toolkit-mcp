@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ToolkitError } from "./errors.js";
 import { requestJson, type FetchLike } from "./http.js";
-import { clip, isRecord, num, str } from "./text.js";
+import { clip, httpUrlOrUndefined, isRecord, num, shaped, str, type Shaped } from "./text.js";
 import { normalizeDomain, normalizeUrl } from "./validate.js";
 
 export const SEOBOLT_BASE = "https://seobolt.app";
@@ -63,7 +63,7 @@ const robotsPath = z
   .trim()
   .min(1)
   .max(200)
-  .regex(/^\//, "paths must start with '/'");
+  .regex(/^\/[^\s\p{C}\\]*$/u, "paths must start with '/' and contain no whitespace, control characters or backslashes");
 
 export const seoCheckShape = {
   tool: z.enum(SEO_SLUGS).describe("Which SEOBolt checker to run."),
@@ -128,11 +128,6 @@ export const freeAuditSchema = z.object(freeAuditShape).transform((input, ctx) =
   }
 });
 
-export interface Shaped {
-  summary: string;
-  data: Record<string, unknown>;
-}
-
 const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 const MAX_RECOMMENDATIONS = 25;
 
@@ -165,7 +160,7 @@ export function shapeFreeAudit(raw: unknown): Shaped {
     seoScore: num(raw.seoScore),
     llmScore: num(raw.llmScore),
     checkedAt: str(raw.checkedAt),
-    reportUrl: str(raw.reportUrl),
+    reportUrl: httpUrlOrUndefined(raw.reportUrl),
     recommendationCounts: counts,
     recommendations: recs.slice(0, MAX_RECOMMENDATIONS),
     ...(recs.length > MAX_RECOMMENDATIONS ? { recommendationsOmitted: recs.length - MAX_RECOMMENDATIONS } : {}),
@@ -173,13 +168,14 @@ export function shapeFreeAudit(raw: unknown): Shaped {
   const countText = Object.entries(counts)
     .map(([k, v]) => `${v} ${k}`)
     .join(", ");
-  return {
-    summary: `SEOBolt free audit for ${domain}: score ${data.score ?? "n/a"} (seo ${data.seoScore ?? "n/a"}, llm ${data.llmScore ?? "n/a"}); ${recs.length} recommendations${countText ? ` (${countText})` : ""}.`,
+  return shaped(
+    `SEOBolt free audit for ${domain}: score ${data.score ?? "n/a"} (seo ${data.seoScore ?? "n/a"}, llm ${data.llmScore ?? "n/a"}); ${recs.length} recommendations${countText ? ` (${countText})` : ""}.`,
     data,
-  };
+  );
 }
 
 const MAX_SECTIONS = 6;
+const MAX_CHECKS = 40;
 const MAX_TABLE_ROWS = 15;
 
 function shapeSection(section: unknown): Record<string, unknown> | undefined {
@@ -205,7 +201,8 @@ function shapeSection(section: unknown): Record<string, unknown> | undefined {
 function shapeStandard(slug: SeoSlug, raw: Record<string, unknown>): Shaped {
   const verdict = isRecord(raw.verdict) ? raw.verdict : {};
   const counts = isRecord(raw.summary) ? raw.summary : {};
-  const checks = (raw.checks as unknown[]).filter(isRecord).map((c) => ({
+  const allChecks = (raw.checks as unknown[]).filter(isRecord);
+  const checks = allChecks.slice(0, MAX_CHECKS).map((c) => ({
     id: str(c.id),
     label: clip(str(c.label) ?? "", 200),
     status: str(c.status),
@@ -224,13 +221,14 @@ function shapeStandard(slug: SeoSlug, raw: Record<string, unknown>): Shaped {
     verdict: { status, text: clip(str(verdict.text) ?? "", 300) },
     counts: { pass: num(counts.pass) ?? 0, warn: num(counts.warn) ?? 0, fail: num(counts.fail) ?? 0, info: num(counts.info) ?? 0 },
     checks,
+    ...(allChecks.length > MAX_CHECKS ? { checksOmitted: allChecks.length - MAX_CHECKS } : {}),
     sections: sections.slice(0, MAX_SECTIONS),
     ...(sections.length > MAX_SECTIONS ? { sectionsOmitted: sections.length - MAX_SECTIONS } : {}),
   };
-  return {
-    summary: `${slug} on ${target}: ${status.toUpperCase()} - ${data.verdict.text} (pass ${data.counts.pass}, warn ${data.counts.warn}, fail ${data.counts.fail}).`,
+  return shaped(
+    `${slug} on ${target}: ${status.toUpperCase()} - ${data.verdict.text} (pass ${data.counts.pass}, warn ${data.counts.warn}, fail ${data.counts.fail}).`,
     data,
-  };
+  );
 }
 
 function shapeMeta(raw: Record<string, unknown>): Shaped {
@@ -245,10 +243,10 @@ function shapeMeta(raw: Record<string, unknown>): Shaped {
     lengths: raw.lengths,
     issues,
   };
-  return {
-    summary: `meta-tag-checker on ${target}: ${issues.length === 0 ? "no issues found" : `${issues.length} issue(s), e.g. ${issues.slice(0, 3).join("; ")}`}.`,
+  return shaped(
+    `meta-tag-checker on ${target}: ${issues.length === 0 ? "no issues found" : `${issues.length} issue(s), e.g. ${issues.slice(0, 3).join("; ")}`}.`,
     data,
-  };
+  );
 }
 
 const MAX_ROBOTS_TESTS = 60;
@@ -265,7 +263,7 @@ function shapeRobots(raw: Record<string, unknown>): Shaped {
     httpStatus: num(raw.status),
     found,
     warning: str(raw.warning),
-    sitemaps: Array.isArray(raw.sitemaps) ? raw.sitemaps.slice(0, 20) : [],
+    sitemaps: Array.isArray(raw.sitemaps) ? raw.sitemaps.filter((u) => typeof u === "string").slice(0, 20) : [],
     groups: groups.slice(0, 30),
     ...(groups.length > 30 ? { groupsOmitted: groups.length - 30 } : {}),
     tests: tests.slice(0, MAX_ROBOTS_TESTS).map((t) => ({
@@ -277,10 +275,10 @@ function shapeRobots(raw: Record<string, unknown>): Shaped {
     ...(tests.length > MAX_ROBOTS_TESTS ? { testsOmitted: tests.length - MAX_ROBOTS_TESTS } : {}),
     robotsTxt: clip(str(raw.robotsTxt) ?? "", 4000),
   };
-  return {
-    summary: `robots-txt-tester on ${robotsUrl}: ${found ? "robots.txt found" : "no robots.txt found"}; ${blocked} of ${tests.length} tested bot/path pairs blocked.`,
+  return shaped(
+    `robots-txt-tester on ${robotsUrl}: ${found ? "robots.txt found" : "no robots.txt found"}; ${blocked} of ${tests.length} tested bot/path pairs blocked.`,
     data,
-  };
+  );
 }
 
 export function shapeSeoCheck(slug: SeoSlug, raw: unknown): Shaped {
