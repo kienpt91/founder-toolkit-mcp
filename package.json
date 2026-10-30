@@ -1,0 +1,46 @@
+{
+  "name": "founder-toolkit-mcp",
+  "version": "0.1.0",
+  "description": "Free, no-API-key MCP server and portable agent skills for SEO audits, startup revenue lookups and email authentication checks.",
+  "license": "MIT",
+  "author": "Kien Phan",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "founder-toolkit-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "seo",
+    "dmarc",
+    "spf",
+    "dkim",
+    "agent-skills"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke:live": "tsx scripts/smoke-live.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
