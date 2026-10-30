@@ -1,4 +1,3 @@
-import { domainToUnicode } from "node:url";
 import { ToolkitError } from "./errors.js";
 import { cleanText } from "./text.js";
 
@@ -78,11 +77,121 @@ export function publicNameProblem(host: string): string | undefined {
   return undefined;
 }
 
+// RFC 3492 punycode, implemented here so that validation does not depend on the Node/ICU build's IDNA handling.
+const PC = { base: 36, tMin: 1, tMax: 26, skew: 38, damp: 700, initialBias: 72, initialN: 128 } as const;
+
+function adapt(delta: number, numPoints: number, first: boolean): number {
+  let d = first ? Math.floor(delta / PC.damp) : delta >> 1;
+  d += Math.floor(d / numPoints);
+  let k = 0;
+  while (d > ((PC.base - PC.tMin) * PC.tMax) >> 1) {
+    d = Math.floor(d / (PC.base - PC.tMin));
+    k += PC.base;
+  }
+  return k + Math.floor(((PC.base - PC.tMin + 1) * d) / (d + PC.skew));
+}
+
+function digitValue(c: number): number {
+  if (c >= 48 && c <= 57) return c - 22; // 0-9 -> 26-35
+  if (c >= 97 && c <= 122) return c - 97; // a-z -> 0-25
+  return -1;
+}
+
+function digitChar(d: number): string {
+  return String.fromCharCode(d < 26 ? d + 97 : d + 22);
+}
+
+/** Decodes the part of an `xn--` label after the prefix; undefined when it is not valid punycode. */
+function punycodeDecode(input: string): number[] | undefined {
+  const delim = input.lastIndexOf("-");
+  const out: number[] = [];
+  for (let i = 0; i < Math.max(delim, 0); i++) {
+    const c = input.charCodeAt(i);
+    if (c >= 128) return undefined;
+    out.push(c);
+  }
+  let n: number = PC.initialN;
+  let bias: number = PC.initialBias;
+  let i = 0;
+  for (let idx = delim > 0 ? delim + 1 : 0; idx < input.length; ) {
+    const oldi = i;
+    let w = 1;
+    for (let k = PC.base; ; k += PC.base) {
+      if (idx >= input.length) return undefined;
+      const digit = digitValue(input.charCodeAt(idx++));
+      if (digit < 0 || digit > Math.floor((0x7fffffff - i) / w)) return undefined;
+      i += digit * w;
+      const t = k <= bias ? PC.tMin : k >= bias + PC.tMax ? PC.tMax : k - bias;
+      if (digit < t) break;
+      const mult = PC.base - t;
+      if (w > Math.floor(0x7fffffff / mult)) return undefined;
+      w *= mult;
+    }
+    const len = out.length + 1;
+    bias = adapt(i - oldi, len, oldi === 0);
+    if (Math.floor(i / len) > 0x7fffffff - n) return undefined;
+    n += Math.floor(i / len);
+    i %= len;
+    if (n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff)) return undefined;
+    out.splice(i++, 0, n);
+  }
+  return out;
+}
+
+function punycodeEncode(cps: number[]): string {
+  let out = cps.filter((c) => c < 128).map((c) => String.fromCharCode(c)).join("");
+  const b = out.length;
+  let h = b;
+  if (b > 0) out += "-";
+  let n: number = PC.initialN;
+  let delta = 0;
+  let bias: number = PC.initialBias;
+  while (h < cps.length) {
+    const m = Math.min(...cps.filter((c) => c >= n));
+    delta += (m - n) * (h + 1);
+    n = m;
+    for (const c of cps) {
+      if (c < n) delta++;
+      if (c === n) {
+        let q = delta;
+        for (let k = PC.base; ; k += PC.base) {
+          const t = k <= bias ? PC.tMin : k >= bias + PC.tMax ? PC.tMax : k - bias;
+          if (q < t) break;
+          out += digitChar(t + ((q - t) % (PC.base - t)));
+          q = Math.floor((q - t) / (PC.base - t));
+        }
+        out += digitChar(q);
+        bias = adapt(delta, h + 1, h === b);
+        delta = 0;
+        h++;
+      }
+    }
+    delta++;
+    n++;
+  }
+  return out;
+}
+
 function mixedScriptProblem(asciiHost: string): string | undefined {
-  const unicode = domainToUnicode(asciiHost);
-  if (unicode === "") return "its internationalized (xn--) label is not valid punycode";
-  if (unicode === asciiHost) return undefined;
-  for (const label of unicode.split(".")) {
+  const labels: string[] = [];
+  let anyIdn = false;
+  for (const label of asciiHost.split(".")) {
+    if (!label.startsWith("xn--")) {
+      labels.push(label);
+      continue;
+    }
+    anyIdn = true;
+    const body = label.slice(4);
+    const cps = punycodeDecode(body);
+    const bad = "its internationalized (xn--) label is not valid punycode";
+    if (cps === undefined || cps.length === 0 || cps.every((c) => c < 128)) return bad;
+    if (punycodeEncode(cps) !== body) return bad;
+    const text = String.fromCodePoint(...cps);
+    if (text !== text.normalize("NFC") || !/^[\p{L}\p{M}\p{N}-]+$/u.test(text)) return bad;
+    labels.push(text);
+  }
+  if (!anyIdn) return undefined;
+  for (const label of labels) {
     const present = LETTER_SCRIPTS.filter((s) => new RegExp(`\\p{Script=${s}}`, "u").test(label));
     if (present.filter((s) => !CJK_SCRIPTS.includes(s)).length > 1) {
       return `its label ${shown(label)} mixes writing systems, which is how look-alike (homograph) domains are built; punycode form: ${asciiHost}`;

@@ -88,6 +88,16 @@ describe("normalizeDomain", () => {
 
   it("rejects invalid punycode labels", () => {
     expect(() => normalizeDomain("xn--a.com")).toThrowError();
+    for (const bad of ["xn--.com", "xn---.com", "xn--a-.com", "xn--bcher-kv.com", "xn--z.com", "xn--abc.com", "xn--bcher-kva-.com"]) {
+      expect(() => normalizeDomain(bad), bad).toThrowError(/punycode|valid/);
+    }
+  });
+
+  it("accepts canonical punycode labels", () => {
+    expect(normalizeDomain("xn--bcher-kva.com")).toBe("xn--bcher-kva.com");
+    expect(normalizeDomain("xn--mnchen-3ya.de")).toBe("xn--mnchen-3ya.de");
+    expect(normalizeDomain("xn--80ak6aa92e.com")).toBe("xn--80ak6aa92e.com");
+    expect(normalizeDomain("xn--fiq228c.com")).toBe("xn--fiq228c.com");
   });
 
   it("does not echo hostile input verbatim into errors", () => {
