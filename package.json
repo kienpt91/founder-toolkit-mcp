@@ -16,7 +16,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "keywords": [
     "mcp",
@@ -35,14 +35,14 @@
     "check:lockfile-age": "node scripts/check-lockfile-age.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.31.0",
-    "zod": "3.25.76"
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@types/node": "22.20.4",
+    "@types/node": "22.20.5",
     "tsx": "4.23.15",
     "typescript": "5.9.3",
-    "vitest": "4.1.11"
+    "vitest": "5.0.5"
   },
   "repository": {
     "type": "git",

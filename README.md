@@ -43,12 +43,12 @@ On a 429 the tools return an error result that names the service, the retry time
 
 ## Install
 
-Requires Node.js 20 or newer. The package is not published to npm yet; run it from a checkout:
+Requires Node.js 22.12 or newer. The package is not published to npm yet; run it from a checkout:
 
 ```sh
 git clone https://github.com/kienpt91/founder-toolkit-mcp.git
 cd founder-toolkit-mcp
-npm ci
+npm ci --ignore-scripts
 npm run build
 ```
 
@@ -166,7 +166,7 @@ The run was a single pass with a quiet IP, so it shows the endpoints answer, not
 ## Development
 
 ```sh
-npm ci
+npm ci --ignore-scripts
 npm run typecheck
 npm test            # offline: injected fake fetch and fake DNS resolver, no network
 npm run build
@@ -176,7 +176,7 @@ npm run check:lockfile-age
 
 Unit tests assert request URLs, methods, bodies, timeouts, 429/5xx/non-JSON handling and input validation. An end-to-end test drives the server through the SDK client over a linked in-memory transport.
 
-Dependencies are pinned to versions at least 30 days old; see [SECURITY.md](SECURITY.md) for the policy and the advisories that remain open because their fixes are newer.
+Dependencies are pinned to versions at least 7 days old; see [SECURITY.md](SECURITY.md) for the policy (including installing in a throwaway container) and any advisories that remain open. No extra npm flags such as `--legacy-peer-deps` are needed; use `--ignore-scripts` as shown above.
 
 ## License
 

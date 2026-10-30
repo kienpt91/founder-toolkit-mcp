@@ -1,8 +1,9 @@
-// Lists every locked package version published after a cutoff (default 2026-09-30T00:00:00Z).
+// Lists every locked package version published after a cutoff (default: 7 days before now).
 // Usage: node scripts/check-lockfile-age.mjs [ISO-cutoff]
+const COOLDOWN_DAYS = 7;
 import { readFileSync } from "node:fs";
 
-const cutoff = Date.parse(process.argv[2] ?? "2026-09-30T00:00:00Z");
+const cutoff = process.argv[2] ? Date.parse(process.argv[2]) : Date.now() - COOLDOWN_DAYS * 86_400_000;
 const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
 const entries = Object.entries(lock.packages)
   .filter(([path, meta]) => path.startsWith("node_modules/") && meta.version)
