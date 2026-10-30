@@ -43,5 +43,13 @@
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kienpt91/founder-toolkit-mcp.git"
+  },
+  "homepage": "https://github.com/kienpt91/founder-toolkit-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/kienpt91/founder-toolkit-mcp/issues"
   }
 }
