@@ -38,8 +38,8 @@ export class RateLimitError extends ToolkitError {
   }
 }
 
+/** Message shown to the agent. Unexpected errors are not echoed (they may contain local paths); the server logs them to stderr. */
 export function errorMessage(err: unknown): string {
   if (err instanceof ToolkitError) return err.message;
-  if (err instanceof Error) return `Unexpected error: ${err.message}`;
-  return "Unexpected error.";
+  return "Unexpected internal error. Details were written to the server's stderr.";
 }
