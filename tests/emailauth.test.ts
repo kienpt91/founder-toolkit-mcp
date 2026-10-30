@@ -264,6 +264,17 @@ describe("DKIM", () => {
     expect(r.findings[0]?.message).toContain("does not prove DKIM is missing");
   });
 
+  it("does not fail a domain whose probed selectors are all revoked (wildcard no-DKIM declaration)", async () => {
+    const wildcard = Object.fromEntries(
+      ["default", "google", "selector1", "selector2", "k1", "s1", "s2", "mail", "dkim", "smtp"].map((s) => [`${s}._domainkey.example.com`, ["v=DKIM1; p="]]),
+    );
+    const r = await analyzeDkim(fakeResolver(wildcard).resolver, "example.com");
+    expect(r.status).toBe("warn");
+    expect(codes(r)).toContain("dkim-none-found");
+    expect(r.findings.some((f) => f.severity === "fail")).toBe(false);
+    expect(r.selectors.every((s) => s.state === "revoked")).toBe(true);
+  });
+
   it("reports only the probed selectors that exist", async () => {
     const { resolver } = fakeResolver({ "google._domainkey.example.com": [`v=DKIM1; k=rsa; p=${rsaKeyB64(2048)}`] });
     const r = await analyzeDkim(resolver, "example.com");

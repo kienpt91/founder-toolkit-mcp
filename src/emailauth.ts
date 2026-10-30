@@ -606,17 +606,32 @@ export async function analyzeDkim(resolver: DnsResolver, domain: string, selecto
     const findings = results.flatMap((r) => r.findings);
     return { status: worst(findings), mode: "selectors-given", selectors: results, findings };
   }
+  // A revoked (empty p=) key at a guessed selector is normal: domains that send no mail, and wildcard
+  // "no DKIM" declarations, publish it. It is reported once, as info, and never turned into a failure when probing.
   const found = results.filter((r) => r.state !== "missing");
-  const findings = found.flatMap((r) => r.findings);
-  if (found.length === 0) {
+  const revoked = found.filter((r) => r.state === "revoked");
+  const findings = found.filter((r) => r.state !== "revoked").flatMap((r) => r.findings);
+  if (revoked.length > 0) {
+    findings.push({
+      severity: "info",
+      code: "dkim-revoked",
+      message: `Probed selector(s) ${revoked.map((r) => r.selector).join(", ")} publish an empty p= (revoked key). That is expected when the domain sends no mail or after a key rotation.`,
+    });
+  }
+  if (!found.some((r) => r.state !== "revoked")) {
     findings.push({
       severity: "warn",
       code: "dkim-none-found",
-      message: `None of the common selectors (${COMMON_DKIM_SELECTORS.join(", ")}) resolved. This does not prove DKIM is missing: selectors are provider-specific.`,
+      message: `None of the common selectors (${COMMON_DKIM_SELECTORS.join(", ")}) published a usable key. This does not prove DKIM is missing: selectors are provider-specific.`,
       fix: "Send a test message, read the s= value in its DKIM-Signature header, and re-run with dkimSelectors set to that value.",
     });
   }
-  return { status: worst(findings), mode: "probed-common-selectors", selectors: found, findings };
+  return {
+    status: worst(findings),
+    mode: "probed-common-selectors",
+    selectors: found.map((r) => (r.state === "revoked" ? { ...r, findings: [] } : r)),
+    findings,
+  };
 }
 
 // ------------------------------------------------------------------------- MX
