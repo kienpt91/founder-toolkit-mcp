@@ -33,13 +33,22 @@ await server.connect(serverSide);
 const client = new Client({ name: "smoke-live", version: "0.0.0" });
 await client.connect(clientSide);
 
+/** Strips the untrusted-data frame (header, begin and end markers) so the rest of the script sees summary + JSON. */
+function unframe(text: string): string {
+  const lines = text.split("\n");
+  if (/^<<<UNTRUSTED-DATA [0-9a-f]+>>>$/.test(lines[1] ?? "") && /^<<<END-UNTRUSTED-DATA [0-9a-f]+>>>$/.test(lines[lines.length - 1] ?? "")) {
+    return lines.slice(2, -1).join("\n");
+  }
+  return text;
+}
+
 async function call(label: string, name: string, args: Record<string, unknown>): Promise<string | undefined> {
   const started = Date.now();
   let outcome: Outcome = "OK";
   let text = "";
   try {
     const result = await client.callTool({ name, arguments: args });
-    text = (result.content as { text: string }[]).map((c) => c.text).join("\n");
+    text = unframe((result.content as { text: string }[]).map((c) => c.text).join("\n"));
     if (result.isError) outcome = text.includes("rate_limited") ? "RATE_LIMITED" : "FAIL";
   } catch (err) {
     outcome = "FAIL";

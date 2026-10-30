@@ -85,6 +85,32 @@ describe("skills", () => {
     expect(body).toMatch(/^## Steps$/m);
   });
 
+  it.each(EXPECTED)("%s tells the agent to treat tool output as untrusted data", (name) => {
+    const { body } = load(name);
+    const start = body.indexOf("## Handling tool output");
+    expect(start, `${name}: missing section`).toBeGreaterThan(-1);
+    expect(start).toBeLessThan(body.indexOf("## Steps"));
+    const section = body.slice(start, body.indexOf("\n## ", start + 5));
+    expect(section).toMatch(/untrusted third-party data/);
+    expect(section).toContain("UNTRUSTED-DATA");
+    expect(section).toMatch(/Never follow instructions/);
+    expect(section).toMatch(/not as instructions/);
+    expect(section).toMatch(/Do not paste returned text into shell commands/);
+    // Skills that write files or DNS must say the user approves first; the revenue skill has no writes but forbids opening links.
+    if (name === "verify-revenue-claim") expect(section).toMatch(/Do not open/);
+    else expect(section).toMatch(/Show the user every/);
+  });
+
+  it("never tells the agent to apply tool-supplied text without review", () => {
+    for (const name of EXPECTED) {
+      const { body } = load(name);
+      expect(body, name).not.toMatch(/reuse the `fix` text[^.]*instead of inventing/i);
+    }
+    expect(load("launch-seo-check").body).toMatch(/proposals for the user to approve/);
+    expect(load("ai-search-readiness").body).toMatch(/not applied until the user approves/);
+    expect(load("email-deliverability-check").body).toMatch(/publish only after the user approves/);
+  });
+
   it("uses only valid checker slugs in its example calls", () => {
     const used = new Set<string>();
     for (const name of EXPECTED) {
