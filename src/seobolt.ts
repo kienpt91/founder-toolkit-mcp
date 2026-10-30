@@ -27,7 +27,7 @@ export const SEO_CHECKS = {
   },
   "chatgpt-visibility-checker": {
     input: "domain",
-    purpose: "Can ChatGPT's crawlers reach the site, plus on-page signals for being cited?",
+    purpose: "Can the crawlers behind the most widely used chat assistant reach the site, plus on-page signals for being cited?",
   },
   "ai-citation-readiness-checker": {
     input: "url",

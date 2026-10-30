@@ -78,9 +78,9 @@ describe("seo_check input validation", () => {
   });
 
   it("allows bots/paths only for robots-txt-tester", () => {
-    const ok = seoCheckSchema.parse({ tool: "robots-txt-tester", target: "example.com", bots: ["GPTBot"], paths: ["/a", "/b"] });
-    expect(ok.body).toEqual({ domain: "example.com", bots: ["GPTBot"], paths: ["/a", "/b"] });
-    expect(seoCheckSchema.safeParse({ tool: "sitemap-checker", target: "example.com", bots: ["GPTBot"] }).success).toBe(false);
+    const ok = seoCheckSchema.parse({ tool: "robots-txt-tester", target: "example.com", bots: ["Bingbot"], paths: ["/a", "/b"] });
+    expect(ok.body).toEqual({ domain: "example.com", bots: ["Bingbot"], paths: ["/a", "/b"] });
+    expect(seoCheckSchema.safeParse({ tool: "sitemap-checker", target: "example.com", bots: ["Bingbot"] }).success).toBe(false);
     expect(seoCheckSchema.safeParse({ tool: "robots-txt-tester", target: "example.com", paths: ["no-slash"] }).success).toBe(false);
     expect(seoCheckSchema.safeParse({ tool: "robots-txt-tester", target: "example.com", bots: ["bad bot!"] }).success).toBe(false);
   });
@@ -166,10 +166,10 @@ describe("SeoBoltClient", () => {
       groups: [],
       sitemaps: ["https://example.com/sitemap.xml"],
       tests: [
-        { bot: "GPTBot", path: "/a", allowed: false, matchedRule: "Disallow: /" },
-        { bot: "GPTBot", path: "/b", allowed: true, matchedRule: null },
+        { bot: "Bingbot", path: "/a", allowed: false, matchedRule: "Disallow: /" },
+        { bot: "Bingbot", path: "/b", allowed: true, matchedRule: null },
       ],
-      robotsTxt: "User-agent: GPTBot\nDisallow: /",
+      robotsTxt: "User-agent: Bingbot\nDisallow: /",
     });
     expect(shaped.summary).toContain("1 of 2");
     expect((shaped.data.tests as { allowed: boolean }[]).map((t) => t.allowed)).toEqual([false, true]);
