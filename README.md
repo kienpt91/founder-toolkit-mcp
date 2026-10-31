@@ -178,6 +178,19 @@ Unit tests assert request URLs, methods, bodies, timeouts, 429/5xx/non-JSON hand
 
 Dependencies are pinned to versions at least 7 days old; see [SECURITY.md](SECURITY.md) for the policy (including installing in a throwaway container) and any advisories that remain open. No extra npm flags such as `--legacy-peer-deps` are needed; use `--ignore-scripts` as shown above.
 
+## Secrets and hooks
+
+Never commit `.env` files or credentials. Keep real values in a local, git-ignored `.env` and commit only a `.env.example` with placeholders.
+
+Install [lefthook](https://github.com/evilmartians/lefthook) and run `lefthook install` once per clone. This enables two hooks (see `lefthook.yml`):
+
+- `pre-commit` runs `sh scripts/secret-scan.sh --staged` and blocks a commit that stages a secret-like file or key.
+- `pre-push` runs `sh scripts/secret-scan.sh --tree` and blocks a push if any tracked file contains one.
+
+CI runs the same scanner over the working tree and the full git history. The scanner is a dependency-free shell script. A finding that is a reviewed, harmless fixture can be allowed by adding a line `<path> <rule>   # reason` to `.secret-scan-allow` (one entry per path and rule, no wildcards), or by putting the marker `secret-scan: allow` on the offending line.
+
+If a secret is ever committed, treat it as compromised: rotate or revoke it first, then remove it from git history and force-push.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
