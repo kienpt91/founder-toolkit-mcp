@@ -35,7 +35,7 @@
     "check:lockfile-age": "node scripts/check-lockfile-age.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "4.6.7"
   },
   "devDependencies": {
